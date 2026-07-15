@@ -1,4 +1,4 @@
-package com.example.fixit_community
+package com.devthanseem.fixitcommunity
 
 import io.flutter.embedding.android.FlutterActivity
 

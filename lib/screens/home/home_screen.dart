@@ -45,13 +45,13 @@ class _HomeScreenState extends State<HomeScreen> {
             // Highlight the Plus button temporarily
             setState(() => currentIndex = 1);
 
-            // Open the Add Screen and wait for user to return
+            // Open the Add Problem screen and wait for the user to return
             await Navigator.push(
               context,
               MaterialPageRoute(builder: (context) => const AddProblemScreen()),
             );
 
-            // Return highlight to Home after closing Add Screen
+            // Return highlight to Home after closing the Add screen
             setState(() => currentIndex = 0);
           } else {
             // Normal navigation between Home (0) and Account (2)
