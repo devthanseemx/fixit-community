@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
-        android:label="fixit_community"
+        android:label="FixIt Community"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
