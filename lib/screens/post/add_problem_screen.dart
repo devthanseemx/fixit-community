@@ -1,4 +1,7 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../../core/theme/app_colors.dart';
 import '../../widgets/step_input_field.dart';
 import '../../widgets/notification.dart';
@@ -11,18 +14,83 @@ class AddProblemScreen extends StatefulWidget {
 }
 
 class _AddProblemScreenState extends State<AddProblemScreen> {
+  final TextEditingController _titleController = TextEditingController();
+  final TextEditingController _descriptionController = TextEditingController();
   final List<TextEditingController> _stepControllers = [
     TextEditingController(),
   ];
 
-  final List<String> _categories = [
-    "Electronics",
-    "Computer",
-    "Mobile",
-    "Home Repair",
-  ];
-
+  // Categories loaded from Firestore (seeded with "Other").
+  List<String> _categories = [];
   String? _selectedCategory;
+
+  bool _isLoadingCategories = true;
+  bool _isPosting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCategories();
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _descriptionController.dispose();
+    for (final c in _stepControllers) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  // --- Load categories from Firestore, seeding defaults (incl. Other) if empty ---
+  Future<void> _loadCategories() async {
+    try {
+      final snap =
+          await FirebaseFirestore.instance.collection('categories').get();
+
+      if (snap.docs.isEmpty) {
+        // Seed the default category list once (idempotent via fixed ids).
+        const defaults = [
+          {'name': 'Electronics', 'slug': 'electronics', 'order': 1},
+          {'name': 'Computer', 'slug': 'computer', 'order': 2},
+          {'name': 'Mobile', 'slug': 'mobile', 'order': 3},
+          {'name': 'Home Repair', 'slug': 'home_repair', 'order': 4},
+          {'name': 'Other', 'slug': 'other', 'order': 5},
+          {'name': 'Laptop', 'slug': 'laptop', 'order': 6},
+          {'name': 'Networking', 'slug': 'networking', 'order': 7},
+          {'name': 'Printer', 'slug': 'printer', 'order': 8},
+          {'name': 'Software', 'slug': 'software', 'order': 9},
+          {'name': 'Gaming Console', 'slug': 'gaming_console', 'order': 10},
+        ];
+        final batch = FirebaseFirestore.instance.batch();
+        for (final d in defaults) {
+          batch.set(
+            FirebaseFirestore.instance
+                .collection('categories')
+                .doc(d['slug'] as String),
+            {'name': d['name'], 'order': d['order']},
+          );
+        }
+        await batch.commit();
+        if (!mounted) return;
+        _categories = defaults.map((d) => d['name'] as String).toList();
+      } else {
+        final docs = snap.docs;
+        docs.sort((a, b) =>
+            ((a.data()['order'] ?? 0) as int)
+                .compareTo((b.data()['order'] ?? 0) as int));
+        if (!mounted) return;
+        _categories =
+            docs.map((d) => (d.data()['name'] as String)).toList();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      AppMessages.showAlert(context, "Could not load categories: ${e.toString()}");
+    } finally {
+      if (mounted) setState(() => _isLoadingCategories = false);
+    }
+  }
 
   void _addNewStep() {
     setState(() {
@@ -36,8 +104,85 @@ class _AddProblemScreenState extends State<AddProblemScreen> {
     });
   }
 
+  // --- Post the problem to Firestore, linked to the signed-in user ---
+  Future<void> _postProblem() async {
+    final title = _titleController.text.trim();
+    final description = _descriptionController.text.trim();
+    final steps = _stepControllers
+        .map((c) => c.text.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+
+    if (title.isEmpty) {
+      AppMessages.showAlert(context, "Please enter a problem title.");
+      return;
+    }
+    if (_selectedCategory == null) {
+      AppMessages.showAlert(context, "Please select a category.");
+      return;
+    }
+    if (description.isEmpty) {
+      AppMessages.showAlert(context, "Please enter a description.");
+      return;
+    }
+
+    setState(() => _isPosting = true);
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final username = prefs.getString('username');
+      if (username == null) {
+        if (!mounted) return;
+        AppMessages.showAlert(context, "Session expired. Please log in again.");
+        setState(() => _isPosting = false);
+        return;
+      }
+
+      // Fetch the display name (denormalized so the card can show it).
+      String authorName = username;
+      try {
+        final userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(username)
+            .get();
+        final name = userDoc.data()?['fullName'] as String?;
+        if (userDoc.exists && name != null && name.trim().isNotEmpty) {
+          authorName = name.trim();
+        }
+      } catch (_) {
+        // Fall back to username if the user doc can't be read.
+      }
+
+      await FirebaseFirestore.instance.collection('problems').add({
+        'title': title,
+        'description': description,
+        'category': _selectedCategory,
+        'steps': steps,
+        'authorUsername': username,
+        'authorName': authorName,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+
+      if (!mounted) return;
+      AppMessages.showSuccess(context, "Problem posted successfully!");
+      Navigator.pop(context);
+    } catch (e) {
+      if (!mounted) return;
+      AppMessages.showAlert(context, "Failed to post: ${e.toString()}");
+    } finally {
+      if (mounted) setState(() => _isPosting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (_isLoadingCategories) {
+      return const Scaffold(
+        backgroundColor: Colors.white,
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -63,14 +208,20 @@ class _AddProblemScreenState extends State<AddProblemScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // --- PROBLEM TITLE ---
-            const Text("Problem Title", style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text("Problem Title",
+                style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
-            TextField(decoration: _inputDecoration("e.g. My laptop screen is flickering")),
+            TextField(
+              controller: _titleController,
+              enabled: !_isPosting,
+              decoration: _inputDecoration("e.g. My laptop screen is flickering"),
+            ),
 
             const SizedBox(height: 20),
 
-            // --- CATEGORY SELECTION (USING POPUPMENU FOR THE FLOATING GAP) ---
-            const Text("Category", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+            // --- CATEGORY SELECTION (loaded from Firestore) ---
+            const Text("Category",
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
             const SizedBox(height: 8),
 
             Theme(
@@ -79,17 +230,15 @@ class _AddProblemScreenState extends State<AddProblemScreen> {
                 splashColor: Colors.transparent,
               ),
               child: PopupMenuButton<String>(
-                // This creates the physical GAP (Vertical offset)
                 offset: const Offset(0, 55),
                 constraints: BoxConstraints(
                   minWidth: MediaQuery.of(context).size.width - 48,
                   maxWidth: MediaQuery.of(context).size.width - 48,
                 ),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(15)),
                 color: Colors.white,
                 tooltip: "Select Category",
-
-                // This builds the "Box" the user clicks on
                 child: InputDecorator(
                   decoration: _inputDecoration(""),
                   child: Row(
@@ -98,16 +247,17 @@ class _AddProblemScreenState extends State<AddProblemScreen> {
                       Text(
                         _selectedCategory ?? "Select Category",
                         style: TextStyle(
-                          color: _selectedCategory == null ? Colors.black38 : Colors.black87,
+                          color: _selectedCategory == null
+                              ? Colors.black38
+                              : Colors.black87,
                           fontSize: _selectedCategory == null ? 14 : 15,
                         ),
                       ),
-                      const Icon(Icons.keyboard_arrow_down_rounded, color: AppColors.primary),
+                      const Icon(Icons.keyboard_arrow_down_rounded,
+                          color: AppColors.primary),
                     ],
                   ),
                 ),
-
-                // This builds the floating list
                 itemBuilder: (context) => _categories.map((cat) {
                   return PopupMenuItem<String>(
                     value: cat,
@@ -120,7 +270,6 @@ class _AddProblemScreenState extends State<AddProblemScreen> {
                     ),
                   );
                 }).toList(),
-
                 onSelected: (val) {
                   setState(() {
                     _selectedCategory = val;
@@ -132,9 +281,12 @@ class _AddProblemScreenState extends State<AddProblemScreen> {
             const SizedBox(height: 20),
 
             // --- DESCRIPTION ---
-            const Text("Problem Description", style: TextStyle(fontWeight: FontWeight.bold)),
+            const Text("Problem Description",
+                style: TextStyle(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             TextField(
+              controller: _descriptionController,
+              enabled: !_isPosting,
               maxLines: 4,
               decoration: _inputDecoration("Describe what happened in detail..."),
             ),
@@ -145,9 +297,10 @@ class _AddProblemScreenState extends State<AddProblemScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text("Fixing Steps (Optional)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                const Text("Fixing Steps (Optional)",
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                 TextButton.icon(
-                  onPressed: _addNewStep,
+                  onPressed: _isPosting ? null : _addNewStep,
                   icon: const Icon(Icons.add, size: 18),
                   label: const Text("Add Step"),
                   style: TextButton.styleFrom(foregroundColor: AppColors.primary),
@@ -171,21 +324,24 @@ class _AddProblemScreenState extends State<AddProblemScreen> {
               width: double.infinity,
               height: 55,
               child: ElevatedButton(
-                onPressed: () {
-                  if (_selectedCategory == null) {
-                    AppMessages.showAlert(context, "Please select a category!");
-                    return;
-                  }
-                  AppMessages.showSuccess(context, "Problem posted successfully!");
-                  Navigator.pop(context);
-                },
+                onPressed: _isPosting ? null : _postProblem,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
                   foregroundColor: Colors.black,
                   elevation: 0,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(15)),
                 ),
-                child: const Text("Post Problem", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                child: _isPosting
+                    ? const SizedBox(
+                        height: 22,
+                        width: 22,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 3, color: Colors.black),
+                      )
+                    : const Text("Post Problem",
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.bold)),
               ),
             ),
             const SizedBox(height: 20),

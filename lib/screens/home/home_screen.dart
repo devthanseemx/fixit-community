@@ -1,5 +1,8 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+
 import '../../core/theme/app_colors.dart';
+import '../../utils/problem_filter.dart';
 import '../../widgets/home_header.dart';
 import '../../widgets/category_section.dart';
 import '../../widgets/problem_card.dart';
@@ -18,43 +21,120 @@ class _HomeScreenState extends State<HomeScreen> {
   // 0 = Home, 1 = Add (Transition), 2 = Account
   int currentIndex = 0;
 
-  // Category State
+  // Category State (0 = "All")
   int selectedCategory = 0;
-  final List<String> categories = [
-    "All",
-    "Electronics",
-    "Computer",
-    "Mobile",
-    "Home Repair",
-  ];
+  List<String> _dbCategories = [];
+
+  // Search State
+  String _searchQuery = '';
+
+  // Real problems loaded from Firestore
+  List<QueryDocumentSnapshot> _allProblems = [];
+  bool _loadingProblems = true;
+
+  List<String> get _chipCategories => ['All', ..._dbCategories];
+
+  List<QueryDocumentSnapshot> get _visibleProblems {
+    // Filter by category first.
+    var list = _allProblems;
+    if (selectedCategory != 0) {
+      final cat = _chipCategories[selectedCategory];
+      list = list.where((doc) {
+        final d = doc.data() as Map<String, dynamic>;
+        return (d['category'] ?? '') == cat;
+      }).toList();
+    }
+
+    // Then filter by the search keyword across title, description,
+    // category, author, and solution steps.
+    if (_searchQuery.trim().isEmpty) return list;
+    return list
+        .where((doc) => problemMatchesQuery(
+              doc.data() as Map<String, dynamic>,
+              _searchQuery,
+            ))
+        .toList();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCategories();
+    _loadProblems();
+  }
+
+  Future<void> _loadCategories() async {
+    try {
+      final snap =
+          await FirebaseFirestore.instance.collection('categories').get();
+      final docs = snap.docs;
+      docs.sort((a, b) =>
+          ((a.data()['order'] ?? 0) as int)
+              .compareTo((b.data()['order'] ?? 0) as int));
+      _dbCategories =
+          docs.map((d) => (d.data()['name'] as String)).toList();
+    } catch (_) {
+      // Chips will just show "All".
+    }
+  }
+
+  Future<void> _loadProblems() async {
+    try {
+      final snap =
+          await FirebaseFirestore.instance.collection('problems').get();
+      _allProblems = snap.docs;
+      // Newest first (descending by createdAt).
+      _allProblems.sort((a, b) {
+        final ta =
+            (a.data() as Map<String, dynamic>)['createdAt'] as Timestamp?;
+        final tb =
+            (b.data() as Map<String, dynamic>)['createdAt'] as Timestamp?;
+        if (ta == null && tb == null) return 0;
+        if (ta == null) return 1;
+        if (tb == null) return -1;
+        return tb.compareTo(ta);
+      });
+    } catch (_) {
+      // Feed will simply be empty on error.
+    }
+    if (mounted) setState(() => _loadingProblems = false);
+  }
+
+  String _formatTime(Timestamp? ts) {
+    if (ts == null) return '';
+    final d = ts.toDate();
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    final month = months[d.month - 1];
+    final h = d.hour == 0
+        ? 12
+        : (d.hour > 12 ? d.hour - 12 : d.hour);
+    final ampm = d.hour < 12 ? 'AM' : 'PM';
+    final min = d.minute.toString().padLeft(2, '0');
+    return '$month ${d.day}, $h:$min $ampm';
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
-      // This allows the body to scroll behind the glass navbar
       extendBody: true,
-
-      // Swaps between Home Content and Account Screen
       body: _buildBody(),
-
       bottomNavigationBar: FloatingNavbar(
         currentIndex: currentIndex,
         onTap: (index) async {
           if (index == 1) {
-            // Highlight the Plus button temporarily
             setState(() => currentIndex = 1);
-
-            // Open the Add Problem screen and wait for the user to return
             await Navigator.push(
               context,
-              MaterialPageRoute(builder: (context) => const AddProblemScreen()),
+              MaterialPageRoute(
+                  builder: (context) => const AddProblemScreen()),
             );
-
-            // Return highlight to Home after closing the Add screen
             setState(() => currentIndex = 0);
+            _loadProblems(); // Refresh the feed after posting
           } else {
-            // Normal navigation between Home (0) and Account (2)
             setState(() {
               currentIndex = index;
             });
@@ -66,28 +146,28 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// Decides which content to show based on the selected tab
   Widget _buildBody() {
-    // If Account tab is selected
     if (currentIndex == 2) {
       return const AccountScreen();
     }
 
-    // If Home tab is selected (or while transitioning from Add)
     return Column(
       children: [
-        // 1. Header Area (Wave + Title + Search + Overlapping Categories)
         Stack(
           clipBehavior: Clip.none,
           children: [
-            // The Orange Gradient Header with Wave and Fade effect
-            const HomeHeader(),
-
-            // The Categories floating over the Wave
+            HomeHeader(
+              onSearchChanged: (value) {
+                setState(() {
+                  _searchQuery = value;
+                });
+              },
+            ),
             Positioned(
-              bottom: -10, // Moves categories up into the wave area
+              bottom: -10,
               left: 0,
               right: 0,
               child: CategorySection(
-                categories: categories,
+                categories: _chipCategories,
                 selectedIndex: selectedCategory,
                 onCategorySelected: (index) {
                   setState(() {
@@ -98,50 +178,44 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ],
         ),
-
-        // 2. Space between Categories and the List
         const SizedBox(height: 30),
-
-        // 3. The Problem Feed
         Expanded(
-          child: ListView(
-            // Top padding for separation, bottom padding to clear the Floating Navbar
-            padding: const EdgeInsets.only(top: 10, bottom: 130),
-            children: const [
-              ProblemCard(
-                title: "Laptop is not turning on",
-                description:
-                "My laptop suddenly stopped working. The power light is blinking but the screen is black.",
-                category: "Computer",
-                userName: "alex_tech",
-                timeStamp: "Oct 24, 10:30 AM",
-              ),
-              ProblemCard(
-                title: "Phone battery draining quickly",
-                description:
-                "My phone battery drops from 100% to 20% in just two hours of normal use.",
-                category: "Mobile",
-                userName: "john_doe",
-                timeStamp: "Oct 23, 08:15 PM",
-              ),
-              ProblemCard(
-                title: "WiFi connection issue",
-                description:
-                "Internet disconnects every 10 minutes on my router. Need help with settings.",
-                category: "Electronics",
-                userName: "sam_fixit",
-                timeStamp: "Oct 23, 02:45 PM",
-              ),
-              ProblemCard(
-                title: "Broken AC Remote",
-                description:
-                "The display is working but the buttons aren't responding. Tried changing batteries.",
-                category: "Home Repair",
-                userName: "repair_master",
-                timeStamp: "Oct 22, 11:00 AM",
-              ),
-            ],
-          ),
+          child: _loadingProblems
+              ? const Center(child: CircularProgressIndicator())
+              : _visibleProblems.isEmpty
+                  ? Center(
+                      child: Text(
+                        _searchQuery.trim().isNotEmpty
+                            ? 'No results for "${_searchQuery.trim()}"'
+                            : "No problems yet. Tap + to post one!",
+                        style: const TextStyle(color: Colors.grey),
+                        textAlign: TextAlign.center,
+                      ),
+                    )
+                  : ListView(
+                      padding: const EdgeInsets.only(top: 10, bottom: 130),
+                      children: _visibleProblems.map((doc) {
+                        final d = doc.data() as Map<String, dynamic>;
+                        final steps = (d['steps'] as List?)
+                                ?.map((s) => s as String)
+                                .toList() ??
+                            <String>[];
+                        final authorName = (d['authorName'] as String?) ?? '';
+                        final authorUsername =
+                            (d['authorUsername'] as String?) ?? '';
+                        return ProblemCard(
+                          title: (d['title'] ?? '').toString(),
+                          description: (d['description'] ?? '').toString(),
+                          category: (d['category'] ?? 'Other').toString(),
+                          userName: authorName.isNotEmpty
+                              ? authorName
+                              : authorUsername,
+                          timeStamp: _formatTime(
+                              d['createdAt'] as Timestamp?),
+                          steps: steps,
+                        );
+                      }).toList(),
+                    ),
         ),
       ],
     );

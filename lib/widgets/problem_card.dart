@@ -8,6 +8,7 @@ class ProblemCard extends StatelessWidget {
   final String category;
   final String userName;
   final String timeStamp; // Added for date/time
+  final List<String> steps;
 
   const ProblemCard({
     super.key,
@@ -16,6 +17,7 @@ class ProblemCard extends StatelessWidget {
     required this.category,
     required this.userName,
     required this.timeStamp,
+    this.steps = const [],
   });
 
   @override
@@ -32,6 +34,7 @@ class ProblemCard extends StatelessWidget {
               category: category,
               userName: userName,
               timeStamp: timeStamp,
+              steps: steps,
             ),
           ),
         );

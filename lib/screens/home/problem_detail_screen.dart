@@ -7,6 +7,7 @@ class ProblemDetailScreen extends StatelessWidget {
   final String category;
   final String userName;
   final String timeStamp;
+  final List<String> steps;
 
   const ProblemDetailScreen({
     super.key,
@@ -15,6 +16,7 @@ class ProblemDetailScreen extends StatelessWidget {
     required this.category,
     required this.userName,
     required this.timeStamp,
+    this.steps = const [],
   });
 
   @override
@@ -77,12 +79,16 @@ class ProblemDetailScreen extends StatelessWidget {
             ),
             const SizedBox(height: 30),
 
-            // Fixing Steps Placeholder
+            // Fixing Steps (from Firestore)
             const Text("Fixing Steps", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 10),
-            _buildStep(1, "Ensure all cables are connected properly."),
-            _buildStep(2, "Restart your device and check for updates."),
-            _buildStep(3, "Contact system administrator if the issue persists."),
+            if (steps.isEmpty)
+              const Text(
+                "No fixing steps were added for this problem.",
+                style: TextStyle(fontSize: 15, color: Colors.black54, fontStyle: FontStyle.italic),
+              )
+            else
+              ...steps.asMap().entries.map((e) => _buildStep(e.key + 1, e.value)),
           ],
         ),
       ),
