@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import '../../core/theme/app_colors.dart';
 import '../home/home_screen.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../widgets/notification.dart';
 
 class UsernameScreen extends StatefulWidget {
   const UsernameScreen({super.key});
@@ -11,6 +14,63 @@ class UsernameScreen extends StatefulWidget {
 
 class _UsernameScreenState extends State<UsernameScreen> {
   final TextEditingController _usernameController = TextEditingController();
+  bool _isLoading = false; // To show a loader during Firebase check
+
+  Future<void> _handleGetStarted() async {
+    String username = _usernameController.text.trim().toLowerCase();
+
+    if (username.isEmpty) {
+      AppMessages.showAlert(context, "Please enter a username");
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      final userDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(username)
+          .get();
+
+      if (!mounted) return;
+
+      if (userDoc.exists) {
+        // CASE: User exists - Log them in
+        await _saveUserLocally(username);
+        if (!mounted) return;
+        AppMessages.showSuccess(context, "Welcome back, @$username!");
+      } else {
+        // CASE: New user - Create account in Firestore
+        await FirebaseFirestore.instance.collection('users').doc(username).set({
+          'username': username,
+          'fullName': '', // Will be updated in Account Screen later
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+        await _saveUserLocally(username);
+        if (!mounted) return;
+        AppMessages.showSuccess(context, "Account created successfully!");
+      }
+
+      if (!mounted) return;
+
+      // Navigate to Home
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (context) => const HomeScreen()),
+      );
+    } catch (e) {
+      if (mounted) {
+        AppMessages.showAlert(context, "Connection Error: ${e.toString()}");
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _saveUserLocally(String username) async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setString('username', username);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -84,14 +144,7 @@ class _UsernameScreenState extends State<UsernameScreen> {
                 width: double.infinity,
                 height: 60,
                 child: ElevatedButton(
-                  onPressed: () {
-                    if (_usernameController.text.isNotEmpty) {
-                      Navigator.pushReplacement(
-                        context,
-                        MaterialPageRoute(builder: (context) => const HomeScreen()),
-                      );
-                    }
-                  },
+                  onPressed: _isLoading ? null : _handleGetStarted,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
                     foregroundColor: Colors.black,
@@ -100,17 +153,26 @@ class _UsernameScreenState extends State<UsernameScreen> {
                       borderRadius: BorderRadius.circular(15),
                     ),
                   ),
-                  child: const Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        "Get Started",
-                        style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-                      ),
-                      SizedBox(width: 10),
-                      Icon(Icons.arrow_forward_rounded, size: 20),
-                    ],
-                  ),
+                  child: _isLoading
+                      ? const SizedBox(
+                          height: 24,
+                          width: 24,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 3,
+                            color: Colors.black,
+                          ),
+                        )
+                      : const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              "Get Started",
+                              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                            ),
+                            SizedBox(width: 10),
+                            Icon(Icons.arrow_forward_rounded, size: 20),
+                          ],
+                        ),
                 ),
               ),
               const SizedBox(height: 30),

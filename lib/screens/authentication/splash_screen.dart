@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'username_screen.dart';
+import '../home/home_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -13,6 +15,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   late AnimationController _controller;
   late Animation<double> _fadeAnimation;
   late Animation<double> _scaleAnimation;
+  Timer? _timer;
 
   @override
   void initState() {
@@ -33,16 +36,31 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
 
     _controller.forward();
 
-    Timer(const Duration(seconds: 5), () {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const UsernameScreen()),
-      );
+    _timer = Timer(const Duration(seconds: 3), () async {
+      final prefs = await SharedPreferences.getInstance();
+      if (!mounted) return;
+      final String? savedUsername = prefs.getString('username');
+
+      if (!mounted) return;
+      if (savedUsername != null) {
+        // User already exists locally, go directly to Home
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const HomeScreen()),
+        );
+      } else {
+        // First time user, go to Username Screen
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const UsernameScreen()),
+        );
+      }
     });
   }
 
   @override
   void dispose() {
+    _timer?.cancel();
     _controller.dispose();
     super.dispose();
   }
