@@ -1,11 +1,11 @@
 import 'dart:convert';
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../services/data_service.dart';
 import '../../widgets/notification.dart';
 import '../authentication/username_screen.dart';
 
@@ -61,20 +61,16 @@ class _AccountScreenState extends State<AccountScreen> {
     }
 
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(username)
-          .get();
+      final data = await DataService.loadUserProfile(username);
 
       if (!mounted) return;
 
-      if (doc.exists) {
-        final data = doc.data()!;
+      if (data != null) {
         _usernameController.text = (data['username'] ?? username).toString();
         _nameController.text = (data['fullName'] ?? '').toString();
         _profileImageBase64 = data['profileImage'] as String?;
       } else {
-        // Document missing but we still have a local session.
+        // Profile missing but we still have a local session.
         _usernameController.text = username;
       }
       _originalUsername = _usernameController.text.trim().toLowerCase();
@@ -131,46 +127,14 @@ class _AccountScreenState extends State<AccountScreen> {
     setState(() => _isSaving = true);
 
     try {
-      final users = FirebaseFirestore.instance.collection('users');
-      final usernameChanged = newUsername != _originalUsername;
-
-      if (usernameChanged) {
-        // Make sure the new username is not already taken.
-        final existing = await users.doc(newUsername).get();
-        if (existing.exists) {
-          if (!mounted) return;
-          AppMessages.showAlert(
-              context, "@$newUsername is already taken. Choose another.");
-          setState(() => _isSaving = false);
-          return;
-        }
-
-        // Copy the old document to the new id, then remove the old one.
-        final oldDoc = await users.doc(_originalUsername!).get();
-        final createdAt = oldDoc.data()?['createdAt'];
-
-        await users.doc(newUsername).set({
-          'username': newUsername,
-          'fullName': newName,
-          'createdAt': createdAt ?? FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-          if (_profileImageBase64 != null) 'profileImage': _profileImageBase64,
-        });
-        await users.doc(_originalUsername!).delete();
-
-        // Keep the local session in sync with the new username.
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('username', newUsername);
-        _originalUsername = newUsername;
-      } else {
-        // Username unchanged -> just update the fields.
-        await users.doc(newUsername).update({
-          'fullName': newName,
-          if (_profileImageBase64 != null)
-            'profileImage': _profileImageBase64,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
+      // Username is fixed at sign-up (the field is disabled), so we only
+      // ever update the current document.
+      final updates = <String, dynamic>{'fullName': newName};
+      if (_profileImageBase64 != null) {
+        updates['profileImage'] = _profileImageBase64;
       }
+
+      await DataService.saveUserProfile(newUsername, updates);
 
       if (!mounted) return;
       setState(() {}); // Refresh the @username label under the avatar
@@ -192,22 +156,7 @@ class _AccountScreenState extends State<AccountScreen> {
     setState(() => _isDeleting = true);
 
     try {
-      // Delete the user document from Firestore.
-      await FirebaseFirestore.instance
-          .collection('users')
-          .doc(username)
-          .delete();
-
-      // Delete every problem this user posted (maintain references).
-      final problems = await FirebaseFirestore.instance
-          .collection('problems')
-          .where('authorUsername', isEqualTo: username)
-          .get();
-      final batch = FirebaseFirestore.instance.batch();
-      for (final doc in problems.docs) {
-        batch.delete(doc.reference);
-      }
-      await batch.commit();
+      await DataService.deleteUser(username);
 
       // Clear the local session.
       final prefs = await SharedPreferences.getInstance();

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../utils/problem_filter.dart';
+import '../../services/data_service.dart';
 import '../../widgets/home_header.dart';
 import '../../widgets/category_section.dart';
 import '../../widgets/problem_card.dart';
@@ -28,19 +29,19 @@ class _HomeScreenState extends State<HomeScreen> {
   // Search State
   String _searchQuery = '';
 
-  // Real problems loaded from Firestore
-  List<QueryDocumentSnapshot> _allProblems = [];
+  // Problems loaded from the data service (Firestore or demo store)
+  List<Map<String, dynamic>> _allProblems = [];
   bool _loadingProblems = true;
 
   List<String> get _chipCategories => ['All', ..._dbCategories];
 
-  List<QueryDocumentSnapshot> get _visibleProblems {
+  List<Map<String, dynamic>> get _visibleProblems {
     // Filter by category first.
     var list = _allProblems;
     if (selectedCategory != 0) {
       final cat = _chipCategories[selectedCategory];
       list = list.where((doc) {
-        final d = doc.data() as Map<String, dynamic>;
+        final d = doc;
         return (d['category'] ?? '') == cat;
       }).toList();
     }
@@ -50,7 +51,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_searchQuery.trim().isEmpty) return list;
     return list
         .where((doc) => problemMatchesQuery(
-              doc.data() as Map<String, dynamic>,
+              doc,
               _searchQuery,
             ))
         .toList();
@@ -65,14 +66,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadCategories() async {
     try {
-      final snap =
-          await FirebaseFirestore.instance.collection('categories').get();
-      final docs = snap.docs;
-      docs.sort((a, b) =>
-          ((a.data()['order'] ?? 0) as int)
-              .compareTo((b.data()['order'] ?? 0) as int));
-      _dbCategories =
-          docs.map((d) => (d.data()['name'] as String)).toList();
+      _dbCategories = await DataService.loadCategories();
     } catch (_) {
       // Chips will just show "All".
     }
@@ -80,20 +74,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadProblems() async {
     try {
-      final snap =
-          await FirebaseFirestore.instance.collection('problems').get();
-      _allProblems = snap.docs;
-      // Newest first (descending by createdAt).
-      _allProblems.sort((a, b) {
-        final ta =
-            (a.data() as Map<String, dynamic>)['createdAt'] as Timestamp?;
-        final tb =
-            (b.data() as Map<String, dynamic>)['createdAt'] as Timestamp?;
-        if (ta == null && tb == null) return 0;
-        if (ta == null) return 1;
-        if (tb == null) return -1;
-        return tb.compareTo(ta);
-      });
+      _allProblems = await DataService.loadProblems();
     } catch (_) {
       // Feed will simply be empty on error.
     }
@@ -195,7 +176,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   : ListView(
                       padding: const EdgeInsets.only(top: 10, bottom: 130),
                       children: _visibleProblems.map((doc) {
-                        final d = doc.data() as Map<String, dynamic>;
+                        final d = doc;
                         final steps = (d['steps'] as List?)
                                 ?.map((s) => s as String)
                                 .toList() ??

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../core/theme/app_colors.dart';
+import '../../services/data_service.dart';
 import '../home/home_screen.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../widgets/notification.dart';
 
@@ -27,31 +27,11 @@ class _UsernameScreenState extends State<UsernameScreen> {
     setState(() => _isLoading = true);
 
     try {
-      final userDoc = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(username)
-          .get();
+      await DataService.createOrLoginUser(username);
+      await _saveUserLocally(username);
 
       if (!mounted) return;
-
-      if (userDoc.exists) {
-        // CASE: User exists - Log them in
-        await _saveUserLocally(username);
-        if (!mounted) return;
-        AppMessages.showSuccess(context, "Welcome back, @$username!");
-      } else {
-        // CASE: New user - Create account in Firestore
-        await FirebaseFirestore.instance.collection('users').doc(username).set({
-          'username': username,
-          'fullName': '', // Will be updated in Account Screen later
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-        await _saveUserLocally(username);
-        if (!mounted) return;
-        AppMessages.showSuccess(context, "Account created successfully!");
-      }
-
-      if (!mounted) return;
+      AppMessages.showSuccess(context, "Welcome, @$username!");
 
       // Navigate to Home
       Navigator.pushReplacement(

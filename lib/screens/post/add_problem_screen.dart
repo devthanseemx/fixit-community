@@ -1,8 +1,8 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../services/data_service.dart';
 import '../../widgets/step_input_field.dart';
 import '../../widgets/notification.dart';
 
@@ -43,47 +43,10 @@ class _AddProblemScreenState extends State<AddProblemScreen> {
     super.dispose();
   }
 
-  // --- Load categories from Firestore, seeding defaults (incl. Other) if empty ---
+  // --- Load categories via the data service (seeds defaults if empty) ---
   Future<void> _loadCategories() async {
     try {
-      final snap =
-          await FirebaseFirestore.instance.collection('categories').get();
-
-      if (snap.docs.isEmpty) {
-        // Seed the default category list once (idempotent via fixed ids).
-        const defaults = [
-          {'name': 'Electronics', 'slug': 'electronics', 'order': 1},
-          {'name': 'Computer', 'slug': 'computer', 'order': 2},
-          {'name': 'Mobile', 'slug': 'mobile', 'order': 3},
-          {'name': 'Home Repair', 'slug': 'home_repair', 'order': 4},
-          {'name': 'Other', 'slug': 'other', 'order': 5},
-          {'name': 'Laptop', 'slug': 'laptop', 'order': 6},
-          {'name': 'Networking', 'slug': 'networking', 'order': 7},
-          {'name': 'Printer', 'slug': 'printer', 'order': 8},
-          {'name': 'Software', 'slug': 'software', 'order': 9},
-          {'name': 'Gaming Console', 'slug': 'gaming_console', 'order': 10},
-        ];
-        final batch = FirebaseFirestore.instance.batch();
-        for (final d in defaults) {
-          batch.set(
-            FirebaseFirestore.instance
-                .collection('categories')
-                .doc(d['slug'] as String),
-            {'name': d['name'], 'order': d['order']},
-          );
-        }
-        await batch.commit();
-        if (!mounted) return;
-        _categories = defaults.map((d) => d['name'] as String).toList();
-      } else {
-        final docs = snap.docs;
-        docs.sort((a, b) =>
-            ((a.data()['order'] ?? 0) as int)
-                .compareTo((b.data()['order'] ?? 0) as int));
-        if (!mounted) return;
-        _categories =
-            docs.map((d) => (d.data()['name'] as String)).toList();
-      }
+      _categories = await DataService.loadCategories();
     } catch (e) {
       if (!mounted) return;
       AppMessages.showAlert(context, "Could not load categories: ${e.toString()}");
@@ -140,27 +103,19 @@ class _AddProblemScreenState extends State<AddProblemScreen> {
 
       // Fetch the display name (denormalized so the card can show it).
       String authorName = username;
-      try {
-        final userDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(username)
-            .get();
-        final name = userDoc.data()?['fullName'] as String?;
-        if (userDoc.exists && name != null && name.trim().isNotEmpty) {
-          authorName = name.trim();
-        }
-      } catch (_) {
-        // Fall back to username if the user doc can't be read.
+      final profile = await DataService.loadUserProfile(username);
+      final name = profile?['fullName'] as String?;
+      if (profile != null && name != null && name.trim().isNotEmpty) {
+        authorName = name.trim();
       }
 
-      await FirebaseFirestore.instance.collection('problems').add({
+      await DataService.addProblem({
         'title': title,
         'description': description,
         'category': _selectedCategory,
         'steps': steps,
         'authorUsername': username,
         'authorName': authorName,
-        'createdAt': FieldValue.serverTimestamp(),
       });
 
       if (!mounted) return;
